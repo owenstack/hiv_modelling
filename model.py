@@ -1,9 +1,5 @@
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-from matplotlib.gridspec import GridSpec
-import seaborn as sns
 from datetime import datetime
 from scipy.optimize import curve_fit
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
@@ -14,11 +10,18 @@ import joblib
 import os
 from functools import partial
 import warnings
-warnings.filterwarnings('ignore')
 
-# Set styling for plots
-plt.style.use('seaborn-v0_8-whitegrid')
-sns.set_palette('Set2')
+from visualization import (
+    plot_basic_timeseries,
+    visualize_model_fits,
+    visualize_ensemble_comparison,
+    visualize_metrics_comparison,
+    create_validation_plot,
+    forecast_future_trends
+)
+from utilities import generate_bootstrap_predictions
+
+warnings.filterwarnings('ignore')
 
 # Growth Models
 def exponential_model(x, a, b, c):
@@ -85,21 +88,6 @@ def load_data(file_path):
     except Exception as e:
         print(f"Error loading data: {e}")
         return None
-
-def plot_basic_timeseries(df):
-    """Create basic time series plot of the data"""
-    plt.figure(figsize=(12, 6))
-    plt.plot(df['date'], df['cumulative'], marker='o', linestyle='-', alpha=0.7)
-    plt.title('Cumulative HIV Cases Over Time in Enugu State, Nigeria (2007-2023)')
-    plt.xlabel('Date')
-    plt.ylabel('Cumulative Number of HIV Patients')
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    
-    # Create plots directory if it doesn't exist
-    os.makedirs('plots', exist_ok=True)
-    plt.savefig('plots/hiv_cumulative_cases_time_series.png')
-    plt.close()
 
 def prepare_data_for_modeling(df, n_splits=5):
     """Prepare data for model fitting with full cross-validation"""
@@ -234,6 +222,7 @@ def fit_growth_models(X, y, cv_splits):
             print(f"Error fitting {name} model: {e}")
     
     return fitted_models, model_metrics
+
 # Ensemble Model Building with Hyperparameter Tuning
 def build_ensemble_models(X, y, fitted_models, cv_splits):
     """Build ensemble models with hyperparameter tuning"""
@@ -485,331 +474,7 @@ def build_ensemble_models(X, y, fitted_models, cv_splits):
         }
     }
     
-    return ensemble_models, final_metrics# Visualization Functions
-def plot_manager(plot_func):
-    """Decorator for plot functions to handle saving and closing plots"""
-    def wrapper(*args, **kwargs):
-        fig = plot_func(*args, **kwargs)
-        
-        # Create plots directory if it doesn't exist
-        os.makedirs('plots', exist_ok=True)
-        
-        if 'filename' in kwargs:
-            plt.savefig(os.path.join('plots', kwargs['filename']))
-        else:
-            plt.savefig(os.path.join('plots', f"{plot_func.__name__}.png"))
-        plt.close(fig)
-        return fig
-    return wrapper
-
-@plot_manager
-def visualize_model_fits(df, X, y, X_train, X_test, y_train, y_test, fitted_models, filename='hiv_individual_models_comparison.png'):
-    """Visualize individual model fits"""
-    fig = plt.figure(figsize=(16, 10))
-    
-    # Plot actual data
-    plt.scatter(df['date'].iloc[X_train], y_train, color='blue', alpha=0.6, label='Training Data')
-    plt.scatter(df['date'].iloc[X_test], y_test, color='red', alpha=0.6, label='Testing Data')
-    
-    # Predict for full date range and plot fitted models
-    colors = ['green', 'purple', 'orange', 'brown']
-    for i, (name, model) in enumerate(fitted_models.items()):
-        y_pred = model['function'](X, *model['parameters'])
-        plt.plot(df['date'], y_pred, color=colors[i % len(colors)], linewidth=2, label=f'{name} Model')
-    
-    plt.title('Cumulative HIV Growth Models Comparison - Enugu State, Nigeria (2007-2023)', fontsize=16)
-    plt.xlabel('Date', fontsize=14)
-    plt.ylabel('Cumulative Number of HIV Patients', fontsize=14)
-    plt.legend(fontsize=12)
-    plt.grid(True, alpha=0.3)
-    plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
-    plt.gca().xaxis.set_major_locator(mdates.YearLocator(2))
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    
-    return fig
-
-@plot_manager
-def visualize_ensemble_comparison(df, X, y, cv_splits, fitted_models, ensemble_models, filename='hiv_ensemble_models_comparison.png'):
-    """Visualize and compare ensemble models performance"""
-    fig = plt.figure(figsize=(16, 10))
-    
-    # Use the last split for visualization
-    train_idx, test_idx = cv_splits[-1]
-    
-    # Plot actual data
-    plt.scatter(df['date'].iloc[train_idx], y[train_idx], color='blue', alpha=0.6, label='Training Data')
-    plt.scatter(df['date'].iloc[test_idx], y[test_idx], color='red', alpha=0.6, label='Testing Data')
-    
-    # Plot best individual model
-    best_model_name = max(model_metrics, key=lambda k: model_metrics[k]['test_r2'])
-    best_model = fitted_models[best_model_name]
-    y_pred_best = best_model['function'](X, *best_model['parameters'])
-    plt.plot(df['date'], y_pred_best, color='green', linewidth=2, label=f'Best Individual ({best_model_name})')
-    
-    # Create features for full range prediction
-    full_features = np.column_stack([
-        model['function'](X, *model['parameters']) 
-        for model in fitted_models.values()
-    ])
-    
-    # Plot ensemble models
-    colors = ['purple', 'orange', 'brown', 'magenta']
-    ensemble_models_to_plot = ['Simple Average', 'Weighted Average', 'Random Forest', 'Gradient Boosting']
-    
-    for i, name in enumerate(ensemble_models_to_plot):
-        if name in ['Simple Average', 'Weighted Average']:
-            y_pred = ensemble_models[name]['predict'](full_features)
-        else:  # Machine learning ensembles
-            scaled_features = ensemble_models[name]['scaler'].transform(full_features)
-            y_pred = ensemble_models[name]['model'].predict(scaled_features)
-            
-        plt.plot(df['date'], y_pred, color=colors[i], linewidth=2, label=f'{name} Ensemble')
-    
-    plt.title('HIV Growth Ensemble Models Comparison - Enugu State, Nigeria (2007-2023)', fontsize=16)
-    plt.xlabel('Date', fontsize=14)
-    plt.ylabel('Number of HIV Patients', fontsize=14)
-    plt.legend(fontsize=12)
-    plt.grid(True, alpha=0.3)
-    plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
-    plt.gca().xaxis.set_major_locator(mdates.YearLocator(2))
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    
-    return fig
-
-@plot_manager
-def visualize_metrics_comparison(model_metrics, ensemble_metrics, filename='hiv_model_metrics_comparison.png'):
-    """Visualize performance metrics comparison between models"""
-    # Combine all metrics
-    all_metrics = {**model_metrics, **ensemble_metrics}
-    
-    # Create DataFrames for easier plotting
-    metrics_data = {
-        'Model': [],
-        'Type': [],
-        'RMSE': [],
-        'R²': [],
-        'MAE': []
-    }
-    
-    for model_name, metrics in all_metrics.items():
-        metrics_data['Model'].append(model_name)
-        metrics_data['Type'].append('Individual' if model_name in model_metrics else 'Ensemble')
-        metrics_data['RMSE'].append(metrics['test_rmse'])
-        metrics_data['R²'].append(metrics['test_r2'])
-        metrics_data['MAE'].append(metrics['test_mae'])
-    
-    metrics_df = pd.DataFrame(metrics_data)
-    
-    # Create visualizations
-    fig = plt.figure(figsize=(18, 15))
-    gs = GridSpec(2, 2, figure=fig)
-    
-    # RMSE comparison
-    ax1 = fig.add_subplot(gs[0, 0])
-    sns.barplot(x='Model', y='RMSE', hue='Type', data=metrics_df, ax=ax1)
-    ax1.set_title('Root Mean Squared Error (RMSE) Comparison', fontsize=14)
-    ax1.set_xlabel('')
-    ax1.set_ylabel('RMSE (lower is better)', fontsize=12)
-    ax1.tick_params(axis='x', rotation=45)
-    
-    # R² comparison
-    ax2 = fig.add_subplot(gs[0, 1])
-    sns.barplot(x='Model', y='R²', hue='Type', data=metrics_df, ax=ax2)
-    ax2.set_title('R² Score Comparison', fontsize=14)
-    ax2.set_xlabel('')
-    ax2.set_ylabel('R² (higher is better)', fontsize=12)
-    ax2.tick_params(axis='x', rotation=45)
-    
-    # MAE comparison
-    ax3 = fig.add_subplot(gs[1, 0])
-    sns.barplot(x='Model', y='MAE', hue='Type', data=metrics_df, ax=ax3)
-    ax3.set_title('Mean Absolute Error (MAE) Comparison', fontsize=14)
-    ax3.set_xlabel('')
-    ax3.set_ylabel('MAE (lower is better)', fontsize=12)
-    ax3.tick_params(axis='x', rotation=45)
-    
-    # Overall metric ranking
-    ax4 = fig.add_subplot(gs[1, 1])
-    
-    # Calculate a combined score (normalized)
-    metrics_df['RMSE_norm'] = (metrics_df['RMSE'] - metrics_df['RMSE'].min()) / (metrics_df['RMSE'].max() - metrics_df['RMSE'].min() + 1e-10)
-    metrics_df['R²_norm'] = 1 - (metrics_df['R²'] - metrics_df['R²'].min()) / (metrics_df['R²'].max() - metrics_df['R²'].min() + 1e-10)
-    metrics_df['MAE_norm'] = (metrics_df['MAE'] - metrics_df['MAE'].min()) / (metrics_df['MAE'].max() - metrics_df['MAE'].min() + 1e-10)
-    
-    metrics_df['Overall_Score'] = (1 - metrics_df['RMSE_norm'] + metrics_df['R²_norm'] + (1 - metrics_df['MAE_norm'])) / 3
-    
-    # Sort by overall score
-    metrics_df = metrics_df.sort_values('Overall_Score', ascending=False)
-    
-    sns.barplot(x='Model', y='Overall_Score', hue='Type', data=metrics_df, ax=ax4)
-    ax4.set_title('Overall Model Performance Score', fontsize=14)
-    ax4.set_xlabel('')
-    ax4.set_ylabel('Performance Score (higher is better)', fontsize=12)
-    ax4.tick_params(axis='x', rotation=45)
-    
-    plt.tight_layout()
-    
-    return fig
-
-def generate_bootstrap_predictions(model_func, X, params, n_samples=100, confidence=0.95):
-    """Generate bootstrap predictions with confidence intervals"""
-    # Slight parameter perturbations for each bootstrap
-    bootstrap_predictions = np.zeros((n_samples, len(X)))
-    
-    for i in range(n_samples):
-        # Perturb parameters slightly for each bootstrap sample
-        perturbed_params = [p * (1 + 0.05 * np.random.randn()) for p in params]
-        bootstrap_predictions[i] = model_func(X, *perturbed_params)
-    
-    # Calculate median and confidence intervals
-    lower_quantile = (1 - confidence) / 2
-    upper_quantile = 1 - lower_quantile
-    
-    median_predictions = np.median(bootstrap_predictions, axis=0)
-    lower_bound = np.quantile(bootstrap_predictions, lower_quantile, axis=0)
-    upper_bound = np.quantile(bootstrap_predictions, upper_quantile, axis=0)
-    
-    return median_predictions, lower_bound, upper_bound
-
-@plot_manager
-def forecast_future_trends(df, X, y, best_model, best_ensemble_model, ensemble_name, fitted_models, filename='hiv_forecast_2024_2028.png'):
-    """Forecast future HIV trends with enhanced uncertainty quantification"""
-    # Create future time points (next 5 years)
-    last_date = df['date'].max()
-    future_dates = pd.date_range(start=last_date + pd.Timedelta(days=1), periods=5*365, freq='D')
-    
-    # Create time index for future dates
-    max_time_idx = df['time_idx'].max()
-    future_time_idx = np.arange(max_time_idx + 1, max_time_idx + 1 + len(future_dates))
-    
-    # Bootstrap predictions for uncertainty quantification
-    _, lower_bound, upper_bound = generate_bootstrap_predictions(
-        best_model['function'], future_time_idx, best_model['parameters'], n_samples=1000
-    )
-    
-    # Predict using best individual model
-    best_model_future = best_model['function'](future_time_idx, *best_model['parameters'])
-    
-    # Generate features from individual models for ensemble predictions
-    future_features = np.column_stack([
-        model['function'](future_time_idx, *model['parameters']) 
-        for model in fitted_models.values()
-    ])
-    
-    # Predict using best ensemble model based on ensemble type
-    if ensemble_name in ['Random Forest', 'Gradient Boosting']:
-        # ML-based ensemble models
-        scaled_features = best_ensemble_model['scaler'].transform(future_features)
-        best_ensemble_future = best_ensemble_model['model'].predict(scaled_features)
-    else:
-        # Average-based ensembles
-        best_ensemble_future = best_ensemble_model['predict'](future_features)
-    
-    # Create future DataFrame
-    future_df = pd.DataFrame({
-        'date': future_dates,
-        'time_idx': future_time_idx,
-        'best_model_forecast': best_model_future,
-        'best_ensemble_forecast': best_ensemble_future,
-        'lower_bound': lower_bound,
-        'upper_bound': upper_bound
-    })
-    
-    # Create plot
-    fig = plt.figure(figsize=(16, 8))
-    
-    # Historical data
-    plt.scatter(df['date'], y, color='blue', alpha=0.5, label='Historical Data')
-    
-    # Historical fitted values
-    historical_fitted = best_model['function'](X, *best_model['parameters'])
-    plt.plot(df['date'], historical_fitted, color='green', linestyle='-', linewidth=2, 
-             label=f'Best Individual Model Fit ({best_model_name})')
-    
-    # Future forecasts
-    plt.plot(future_df['date'], future_df['best_model_forecast'], color='green', linestyle='--', 
-             linewidth=2, label=f'Best Individual Model Forecast ({best_model_name})')
-    plt.plot(future_df['date'], future_df['best_ensemble_forecast'], color='purple', linestyle='--', 
-             linewidth=2, label=f'Best Ensemble Forecast ({ensemble_name})')
-    
-    # Add enhanced forecast uncertainty bands
-    plt.fill_between(future_df['date'], 
-                     future_df['lower_bound'],
-                     future_df['upper_bound'],
-                     color='gray', alpha=0.3, label='95% Confidence Interval')
-    
-    plt.title('Cumulative HIV Trend Forecast (2024-2028) - Enugu State, Nigeria', fontsize=16)
-    plt.xlabel('Date', fontsize=14)
-    plt.ylabel('Cumulative Number of HIV Patients', fontsize=14)
-    plt.legend(fontsize=12)
-    plt.grid(True, alpha=0.3)
-    plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
-    plt.gca().xaxis.set_major_locator(mdates.YearLocator(1))
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    
-    # Save forecast data for further analysis
-    future_df.to_csv('forecast_results_2024_2028.csv', index=False)
-    
-    return fig
-
-@plot_manager
-def create_validation_plot(df, X, y, best_model, best_ensemble_model, ensemble_name, fitted_models, filename='hiv_model_validation.png'):
-    """Create validation plot comparing actual vs predicted values for historical data"""
-    # Generate predictions for historical period
-    historical_best_model = best_model['function'](X, *best_model['parameters'])
-    
-    # Generate features from individual models for historical period
-    historical_features = np.column_stack([
-        model['function'](X, *model['parameters']) 
-        for model in fitted_models.values()
-    ])
-    
-    # Get historical ensemble predictions based on ensemble type
-    if ensemble_name in ['Random Forest', 'Gradient Boosting']:
-        scaled_features = best_ensemble_model['scaler'].transform(historical_features)
-        historical_ensemble = best_ensemble_model['model'].predict(scaled_features)
-    else:
-        historical_ensemble = best_ensemble_model['predict'](historical_features)
-    
-    # Create plot
-    fig = plt.figure(figsize=(16, 8))
-    
-    # Plot actual data
-    plt.plot(df['date'], y, color='blue', linewidth=2, label='Actual Cumulative HIV Cases')
-    
-    # Plot predictions
-    plt.plot(df['date'], historical_best_model, color='green', linestyle='--', 
-             linewidth=2, label=f'Best Individual Model ({best_model_name})')
-    plt.plot(df['date'], historical_ensemble, color='purple', linestyle='--', 
-             linewidth=2, label=f'Best Ensemble Model ({ensemble_name})')
-    
-    # Calculate errors
-    individual_rmse = np.sqrt(mean_squared_error(y, historical_best_model))
-    ensemble_rmse = np.sqrt(mean_squared_error(y, historical_ensemble))
-    individual_mae = mean_absolute_error(y, historical_best_model)
-    ensemble_mae = mean_absolute_error(y, historical_ensemble)
-    
-    plt.title('Validation: Actual vs Predicted HIV Cases (2007-2023)', fontsize=16)
-    plt.xlabel('Date', fontsize=14)
-    plt.ylabel('Cumulative Number of HIV Patients', fontsize=14)
-    plt.legend(fontsize=12)
-    plt.grid(True, alpha=0.3)
-    plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
-    plt.gca().xaxis.set_major_locator(mdates.YearLocator(2))
-    plt.xticks(rotation=45)
-    
-    # Add error metrics to plot
-    plt.figtext(0.15, 0.15, f"Best Individual Model RMSE: {individual_rmse:.2f}\nMAE: {individual_mae:.2f}",
-                bbox=dict(facecolor='white', alpha=0.8))
-    plt.figtext(0.15, 0.05, f"Best Ensemble Model RMSE: {ensemble_rmse:.2f}\nMAE: {ensemble_mae:.2f}",
-                bbox=dict(facecolor='white', alpha=0.8))
-    
-    plt.tight_layout()
-    
-    return fig
+    return ensemble_models, final_metrics
 
 # Main function
 def main():
@@ -830,7 +495,7 @@ def main():
     y_train, y_test = y[final_train_idx], y[final_test_idx]
     
     # Fit individual growth models
-    global fitted_models, model_metrics
+    global fitted_models, model_metrics, best_model_name
     fitted_models, model_metrics = fit_growth_models(X, y, cv_splits)
     
     # Visualize individual model fits
@@ -839,28 +504,18 @@ def main():
     # Build ensemble models with hyperparameter tuning
     ensemble_models, ensemble_metrics = build_ensemble_models(X, y, fitted_models, cv_splits)
     
-    # Visualize ensemble comparisons
-    visualize_ensemble_comparison(df, X, y, cv_splits, fitted_models, ensemble_models)
-    
-    # Compare model metrics
-    visualize_metrics_comparison(model_metrics, ensemble_metrics)
-    
     # Identify best models
-    global best_model_name
     best_model_name = max(model_metrics, key=lambda k: model_metrics[k]['test_r2'])
     best_ensemble_model_name = max(ensemble_metrics, key=lambda k: ensemble_metrics[k]['test_r2'])
     
     print(f"\nBest Individual Model: {best_model_name}")
     print(f"Best Ensemble Model: {best_ensemble_model_name}")
     
-    # Forecast future trends with enhanced uncertainty quantification
-    future_df = forecast_future_trends(
-        df, X, y, 
-        fitted_models[best_model_name],
-        ensemble_models[best_ensemble_model_name],
-        best_ensemble_model_name,
-        fitted_models
-    )
+    # Visualize ensemble comparisons
+    visualize_ensemble_comparison(df, X, y, cv_splits, fitted_models, ensemble_models, best_model_name)
+    
+    # Compare model metrics
+    visualize_metrics_comparison(model_metrics, ensemble_metrics)
     
     # Create validation plot
     create_validation_plot(
@@ -868,7 +523,19 @@ def main():
         fitted_models[best_model_name],
         ensemble_models[best_ensemble_model_name],
         best_ensemble_model_name,
-        fitted_models
+        fitted_models,
+        best_model_name
+    )
+    
+    # Forecast future trends with enhanced uncertainty quantification
+    forecast_future_trends(
+        df, X, y,
+        fitted_models[best_model_name],
+        ensemble_models[best_ensemble_model_name],
+        best_ensemble_model_name,
+        fitted_models,
+        best_model_name,
+        generate_bootstrap_predictions
     )
     
     print("\nAnalysis complete. All visualizations saved to disk.")
