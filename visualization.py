@@ -65,7 +65,7 @@ def visualize_model_fits(df, X, y, X_train, X_test, y_train, y_test, fitted_mode
     return fig
 
 @plot_manager
-def visualize_ensemble_comparison(df, X, y, cv_splits, fitted_models, ensemble_models, best_model_name, filename='hiv_ensemble_models_comparison.png'):
+def visualize_ensemble_comparison(df, X, y, cv_splits, fitted_models, ensemble_models, best_model_name):
     """Visualize and compare ensemble models performance"""
     fig = plt.figure(figsize=(16, 10))
     
@@ -78,7 +78,8 @@ def visualize_ensemble_comparison(df, X, y, cv_splits, fitted_models, ensemble_m
     y_pred_best = best_model['function'](X, *best_model['parameters'])
     plt.plot(df['date'], y_pred_best, color='green', linewidth=2, label=f'Best Individual ({best_model_name})')
     
-    full_features = np.column_stack([
+    # Create features for ensemble predictions
+    base_features = np.column_stack([
         model['function'](X, *model['parameters']) 
         for model in fitted_models.values()
     ])
@@ -88,9 +89,10 @@ def visualize_ensemble_comparison(df, X, y, cv_splits, fitted_models, ensemble_m
     
     for i, name in enumerate(ensemble_models_to_plot):
         if name in ['Simple Average', 'Weighted Average']:
-            y_pred = ensemble_models[name]['predict'](full_features)
+            y_pred = ensemble_models[name]['predict'](base_features)
         else:
-            scaled_features = ensemble_models[name]['scaler'].transform(full_features)
+            features = ensemble_models[name]['create_features'](X)
+            scaled_features = ensemble_models[name]['scaler'].transform(features)
             y_pred = ensemble_models[name]['model'].predict(scaled_features)
             
         plt.plot(df['date'], y_pred, color=colors[i], linewidth=2, label=f'{name} Ensemble')
