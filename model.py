@@ -268,6 +268,71 @@ def fit_growth_models(X, y, cv_splits):
     
     return fitted_models, model_metrics
 
+def check_model_assumptions(X, y, fitted_models, model_metrics):
+    """Check if data meets the assumptions of each growth model"""
+    assumptions = {}
+    
+    for name, model in fitted_models.items():
+        params = model['parameters']
+        assumptions[name] = {
+            'assumptions_met': True,
+            'details': []
+        }
+        
+        # Common checks
+        if np.any(np.isnan(y)) or np.any(np.isinf(y)):
+            assumptions[name]['assumptions_met'] = False
+            assumptions[name]['details'].append("Data contains invalid values")
+        
+        # Model-specific checks
+        if name == 'Exponential':
+            # Check if growth rate is positive
+            if params[1] <= 0:  # b parameter
+                assumptions[name]['assumptions_met'] = False
+                assumptions[name]['details'].append("Growth rate parameter 'b' is not positive")
+            # Check if growth is actually exponential
+            residuals = y - model['function'](X, *params)
+            r2 = model_metrics[name]['test_r2']
+            if r2 < 0.95:
+                assumptions[name]['details'].append("Poor fit suggests growth may not be exponential")
+        
+        elif name == 'Logistic':
+            # Check if growth rate is positive
+            if params[1] <= 0:  # b parameter
+                assumptions[name]['assumptions_met'] = False
+                assumptions[name]['details'].append("Growth rate parameter 'b' is not positive")
+            # Check if data shows S-shaped pattern
+            midpoint = params[2]  # c parameter
+            if midpoint < X.min() or midpoint > X.max():
+                assumptions[name]['details'].append("Inflection point outside data range - may not capture full S-shape")
+        
+        elif name == 'Richards':
+            # Check positivity constraints
+            if params[1] <= 0 or params[3] <= 0:  # b and d parameters
+                assumptions[name]['assumptions_met'] = False
+                assumptions[name]['details'].append("Growth rate 'b' or shape parameter 'd' is not positive")
+            # Check if asymmetry is significant
+            if abs(params[3] - 1) < 0.1:  # d parameter close to 1
+                assumptions[name]['details'].append("Shape parameter close to 1 - consider simpler Logistic model")
+        
+        elif name == 'Gompertz':
+            # Check positivity constraints
+            if params[1] <= 0 or params[2] <= 0:  # b and c parameters
+                assumptions[name]['assumptions_met'] = False
+                assumptions[name]['details'].append("Parameters 'b' or 'c' are not positive")
+            # Check asymmetry
+            fitted_values = model['function'](X, *params)
+            peak_growth_idx = np.argmax(np.diff(fitted_values))
+            if peak_growth_idx/len(X) > 0.45 and peak_growth_idx/len(X) < 0.55:
+                assumptions[name]['details'].append("Growth pattern appears symmetric - consider Logistic model")
+        
+        # Check model fit quality
+        r2 = model_metrics[name]['test_r2']
+        if r2 < 0.8:
+            assumptions[name]['details'].append(f"Poor overall fit (R² = {r2:.3f})")
+            
+    return assumptions
+
 # Ensemble Model Building with Improved Feature Engineering and Weight Calculation
 def build_ensemble_models(X, y, fitted_models, cv_splits):
     """Build ensemble models with improved feature engineering and weighting"""
@@ -515,6 +580,7 @@ def build_ensemble_models(X, y, fitted_models, cv_splits):
     }
     
     return ensemble_models, final_metrics
+
 # Main function
 def main():
     # Load and explore data
@@ -536,6 +602,21 @@ def main():
     # Fit individual growth models
     global fitted_models, model_metrics, best_model_name
     fitted_models, model_metrics = fit_growth_models(X, y, cv_splits)
+    
+    # Check model assumptions
+    assumptions = check_model_assumptions(X, y, fitted_models, model_metrics)
+    print("\nModel Assumptions Analysis:")
+    for model_name, result in assumptions.items():
+        print(f"\n{model_name} Model:")
+        if result['assumptions_met'] and not result['details']:
+            print("✓ All assumptions met")
+        else:
+            if not result['assumptions_met']:
+                print("⨯ Some assumptions violated:")
+            else:
+                print("⚠ Potential concerns:")
+            for detail in result['details']:
+                print(f"  - {detail}")
     
     # Visualize individual model fits
     visualize_model_fits(df, X, y, final_train_idx, final_test_idx, y_train, y_test, fitted_models)
