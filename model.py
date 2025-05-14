@@ -42,9 +42,9 @@ def gompertz_model(x, a, b, c, d):
 
 # Data Loading and Preprocessing
 def load_data(file_path):
-    """Load and preprocess HIV data from Excel file"""
+    """Load and preprocess HIV data from CSV file"""
     try:
-        df = pd.read_excel(file_path)
+        df = pd.read_csv(file_path)
         print(f"Data loaded successfully with {df.shape[0]} rows and {df.shape[1]} columns")
         
         # Keep only relevant columns
@@ -518,7 +518,7 @@ def build_ensemble_models(X, y, fitted_models, cv_splits):
 # Main function
 def main():
     # Load and explore data
-    file_path = 'data.xlsx'
+    file_path = 'data/cleaned_enrollments.csv'
     df = load_data(file_path)
     
     if df is None:

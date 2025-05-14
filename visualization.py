@@ -282,5 +282,5 @@ def forecast_future_trends(df, X, y, best_model, best_ensemble_model, ensemble_n
     plt.xticks(rotation=45)
     plt.tight_layout()
     
-    future_df.to_csv('forecast_results_2024_2028.csv', index=False)
+    future_df.to_csv('data/forecast_results_2024_2028.csv', index=False)
     return fig
