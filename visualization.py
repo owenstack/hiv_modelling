@@ -5,6 +5,7 @@ import seaborn as sns
 import numpy as np
 import pandas as pd
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+import scipy.stats as stats
 import os
 from utilities import generate_bootstrap_predictions
 
@@ -283,4 +284,51 @@ def forecast_future_trends(df, X, y, best_model, best_ensemble_model, ensemble_n
     plt.tight_layout()
     
     future_df.to_csv('data/forecast_results_2024_2028.csv', index=False)
+    return fig
+
+@plot_manager
+def plot_residuals(y_true, y_pred, model_name, filename_suffix="", **kwargs):
+    """Plot residuals vs. predicted values."""
+    residuals = y_true - y_pred
+    fig = plt.figure(figsize=(10, 6))
+    plt.scatter(y_pred, residuals, alpha=0.5)
+    plt.axhline(y=0, color='r', linestyle='--')
+    plt.xlabel(f'Predicted Values ({model_name})')
+    plt.ylabel('Residuals')
+    plt.title(f'Residual Plot for {model_name}')
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    # The filename will be handled by the plot_manager decorator,
+    # but we need to pass a unique part for it if not provided.
+    # kwargs['filename'] will be used by plot_manager if present.
+    if 'filename' not in kwargs:
+        kwargs['filename'] = f"residuals_{model_name}{filename_suffix}.png"
+    return fig
+
+@plot_manager
+def plot_qq(residuals, model_name, filename_suffix="", **kwargs):
+    """Create a Q-Q plot of residuals."""
+    fig = plt.figure(figsize=(8, 8))
+    stats.probplot(residuals, dist="norm", plot=plt)
+    plt.title(f'Q-Q Plot of Residuals for {model_name}')
+    plt.xlabel('Theoretical Quantiles')
+    plt.ylabel('Sample Quantiles')
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    if 'filename' not in kwargs:
+        kwargs['filename'] = f"qq_plot_{model_name}{filename_suffix}.png"
+    return fig
+
+@plot_manager
+def plot_residuals_histogram(residuals, model_name, filename_suffix="", **kwargs):
+    """Create a histogram of residuals."""
+    fig = plt.figure(figsize=(10, 6))
+    sns.histplot(residuals, kde=True)
+    plt.xlabel('Residuals')
+    plt.ylabel('Frequency')
+    plt.title(f'Histogram of Residuals for {model_name}')
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    if 'filename' not in kwargs:
+        kwargs['filename'] = f"residuals_histogram_{model_name}{filename_suffix}.png"
     return fig
