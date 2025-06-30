@@ -332,3 +332,45 @@ def plot_residuals_histogram(residuals, model_name, filename_suffix="", **kwargs
     if 'filename' not in kwargs:
         kwargs['filename'] = f"residuals_histogram_{model_name}{filename_suffix}.png"
     return fig
+
+@plot_manager
+def plot_individual_model_fit(df_date_col, X_time_idx, y_actual, train_indices, test_indices,
+                              model_name, model_function, model_parameters, **kwargs):
+    """
+    Visualize individual model fit against observed data.
+    Plots training data, testing data, and the model's predictions.
+    """
+    fig = plt.figure(figsize=(14, 7))
+
+    # Plot training data
+    plt.scatter(df_date_col.iloc[train_indices], y_actual[train_indices],
+                color='blue', alpha=0.6, label='Training Data')
+
+    # Plot testing data
+    if test_indices is not None and len(test_indices) > 0:
+        plt.scatter(df_date_col.iloc[test_indices], y_actual[test_indices],
+                    color='red', alpha=0.6, label='Testing Data')
+
+    # Generate model predictions across the entire range
+    y_pred_full = model_function(X_time_idx, *model_parameters)
+
+    # Plot model predictions
+    plt.plot(df_date_col, y_pred_full, color='green', linewidth=2,
+             label=f'{model_name} Model Prediction')
+
+    plt.title(f'Observed vs. Predicted for {model_name} Model\nEnugu State, Nigeria (2007-2023)', fontsize=16)
+    plt.xlabel('Date', fontsize=14)
+    plt.ylabel('Cumulative Number of HIV Patients', fontsize=14)
+    plt.legend(fontsize=12)
+    plt.grid(True, alpha=0.3)
+
+    plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+    plt.gca().xaxis.set_major_locator(mdates.YearLocator(2))
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+
+    # Filename for plot_manager
+    if 'filename' not in kwargs:
+        kwargs['filename'] = f"fit_observed_vs_predicted_{model_name}.png"
+
+    return fig

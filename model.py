@@ -20,7 +20,8 @@ from visualization import (
     forecast_future_trends,
     plot_residuals,
     plot_qq,
-    plot_residuals_histogram
+    plot_residuals_histogram,
+    plot_individual_model_fit
 )
 from utilities import generate_bootstrap_predictions
 
@@ -126,24 +127,36 @@ def prepare_data_for_modeling(df, n_splits=5):
 def fit_growth_models(X, y, cv_splits):
     """Fit individual growth models with cross-validation and improved convergence"""
     models = {
-        'Exponential': (exponential_model, ([np.max(y)/2, 0.005, min(y)], 
-                                          [0, 0.0001, -np.inf], 
-                                          [np.max(y)*2, 0.1, np.inf])),
-        'Logistic': (logistic_model, ([np.max(y)*1.2, 0.01, np.median(X), min(y)], 
-                                    [np.max(y), 0.001, X.min(), -np.inf], 
-                                    [np.max(y)*2, 0.1, X.max(), np.inf])),
-        'Richards': (richards_model, ([np.max(y)*1.2, 0.01, np.median(X), 1, min(y)], 
-                                    [np.max(y), 0.001, X.min(), 0.1, -np.inf], 
-                                    [np.max(y)*2, 0.1, X.max(), 10, np.inf])),
-        'Gompertz': (gompertz_model, ([np.max(y)*1.2, 2, 0.01, min(y)], 
-                                    [np.max(y), 0.1, 0.001, -np.inf], 
-                                    [np.max(y)*2, 10, 0.1, np.inf]))
+        'Exponential': {
+            'func': exponential_model,
+            'bounds': ([np.max(y)/2, 0.005, min(y)], [0, 0.0001, -np.inf], [np.max(y)*2, 0.1, np.inf]),
+            'param_names': ['a', 'b', 'c']
+        },
+        'Logistic': {
+            'func': logistic_model,
+            'bounds': ([np.max(y)*1.2, 0.01, np.median(X), min(y)], [np.max(y), 0.001, X.min(), -np.inf], [np.max(y)*2, 0.1, X.max(), np.inf]),
+            'param_names': ['a', 'b', 'c', 'd']
+        },
+        'Richards': {
+            'func': richards_model,
+            'bounds': ([np.max(y)*1.2, 0.01, np.median(X), 1, min(y)], [np.max(y), 0.001, X.min(), 0.1, -np.inf], [np.max(y)*2, 0.1, X.max(), 10, np.inf]),
+            'param_names': ['a', 'b', 'c', 'd', 'k']
+        },
+        'Gompertz': {
+            'func': gompertz_model,
+            'bounds': ([np.max(y)*1.2, 2, 0.01, min(y)], [np.max(y), 0.1, 0.001, -np.inf], [np.max(y)*2, 10, 0.1, np.inf]),
+            'param_names': ['a', 'b', 'c', 'd']
+        }
     }
     
     fitted_models = {}
     model_metrics = {}
     
-    for name, (model_func, bounds) in models.items():
+    for name, model_details in models.items():
+        model_func = model_details['func']
+        bounds = model_details['bounds']
+        param_names = model_details['param_names']
+
         try:
             print(f"\nFitting {name} Model with cross-validation...")
             
@@ -277,6 +290,13 @@ def fit_growth_models(X, y, cv_splits):
             print(f"  Avg Train R²: {np.mean(cv_train_r2):.4f} ± {np.std(cv_train_r2):.4f}")
             print(f"  Avg Test R²: {np.mean(cv_test_r2):.4f} ± {np.std(cv_test_r2):.4f}")
             print(f"  Avg Test MAE: {np.mean(cv_test_mae):.2f} ± {np.std(cv_test_mae):.2f}")
+
+            print(f"\n{name} Model - Final Estimated Parameters:")
+            param_table_header = "Parameter | Value"
+            print(param_table_header)
+            print("-" * len(param_table_header))
+            for p_name, p_val in zip(param_names, final_popt):
+                print(f"{p_name:<9} | {p_val:.4f}")
             
         except Exception as e:
             print(f"Error fitting {name} model: {e}")
@@ -551,9 +571,35 @@ def main():
     # Fit individual growth models
     global fitted_models, model_metrics, best_model_name
     fitted_models, model_metrics = fit_growth_models(X, y, cv_splits)
-    
-    # Visualize individual model fits
+
+    # Display Performance Metrics Table for Individual Models
+    print("\n--- Individual Model Performance Metrics ---")
+    metrics_to_display = ['test_rmse', 'test_r2', 'test_mae']
+    header = f"{'Model':<15} | {'Avg Test RMSE':<15} | {'Avg Test R²':<15} | {'Avg Test MAE':<15}"
+    print(header)
+    print("-" * len(header))
+    for model_name, metrics in model_metrics.items():
+        print(f"{model_name:<15} | {metrics['test_rmse']:<15.2f} | {metrics['test_r2']:<15.4f} | {metrics['test_mae']:<15.2f}")
+    print("--------------------------------------------")
+
+    # Visualize individual model fits (combined plot)
     visualize_model_fits(df, X, y, final_train_idx, final_test_idx, y_train, y_test, fitted_models)
+
+    # Generate and save individual Observed vs. Predicted charts for each model
+    print("\nGenerating individual Observed vs. Predicted charts...")
+    for model_name, model_data in fitted_models.items():
+        plot_individual_model_fit(
+            df_date_col=df['date'],
+            X_time_idx=X,
+            y_actual=y,
+            train_indices=final_train_idx, # Using last CV split for representative train/test visual
+            test_indices=final_test_idx,
+            model_name=model_name,
+            model_function=model_data['function'],
+            model_parameters=model_data['parameters'],
+            filename=f"fit_observed_vs_predicted_{model_name}.png"
+        )
+    print("Individual Observed vs. Predicted charts saved to 'plots/' directory.")
     
     # Build ensemble models with hyperparameter tuning
     ensemble_models, ensemble_metrics = build_ensemble_models(X, y, fitted_models, cv_splits)
