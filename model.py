@@ -17,7 +17,10 @@ from visualization import (
     visualize_ensemble_comparison,
     visualize_metrics_comparison,
     create_validation_plot,
-    forecast_future_trends
+    forecast_future_trends,
+    plot_residuals,
+    plot_qq,
+    plot_residuals_histogram
 )
 from utilities import generate_bootstrap_predictions
 
@@ -234,6 +237,18 @@ def fit_growth_models(X, y, cv_splits):
                                     maxfev=100000,
                                     method='trf')
             
+            # Generate predictions on the full dataset for diagnostic plots
+            y_pred_full = model_func(X, *final_popt)
+            residuals_full = y - y_pred_full
+
+            # Generate diagnostic plots
+            plot_residuals(y, y_pred_full, name, filename_suffix="_full_data",
+                           filename=f"residuals_{name}_full_data.png")
+            plot_qq(residuals_full, name, filename_suffix="_full_data",
+                    filename=f"qq_plot_{name}_full_data.png")
+            plot_residuals_histogram(residuals_full, name, filename_suffix="_full_data",
+                                     filename=f"residuals_histogram_{name}_full_data.png")
+
             # Store results
             model_metrics[name] = {
                 'train_rmse': np.mean(cv_train_rmse),
