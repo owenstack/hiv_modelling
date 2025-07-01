@@ -514,6 +514,39 @@ def build_ensemble_models(X, y, fitted_models, cv_splits):
     joblib.dump(final_rf, 'saved_models/rf_model.pkl')
     joblib.dump(final_gb, 'saved_models/gb_model.pkl')
     joblib.dump(scaler, 'saved_models/feature_scaler.pkl')
+
+    # --- Generate and Save Input Tables for Ensemble Techniques ---
+    os.makedirs('tables', exist_ok=True)
+
+    # Base predictions from individual models on the full dataset
+    individual_model_names = list(fitted_models.keys())
+    df_individual_preds = pd.DataFrame(base_features, columns=[f"{name}_pred" for name in individual_model_names])
+    df_individual_preds.insert(0, 'time_idx', X)
+
+    # Weighted Average Ensemble Input Table
+    weighted_avg_full_pred = np.sum(base_features * best_r2_weights.reshape(1, -1), axis=1)
+    df_weighted_avg_input = df_individual_preds.copy()
+    df_weighted_avg_input['Weighted_Average_pred'] = weighted_avg_full_pred
+    print("\n--- Weighted Average Ensemble Input Table (Head) ---")
+    print(df_weighted_avg_input.head())
+    df_weighted_avg_input.to_csv('tables/ensemble_input_weighted_average_predictions.csv', index=False)
+
+    # Random Forest Ensemble Input Table
+    rf_full_pred = final_rf.predict(full_features_scaled)
+    df_rf_input = df_individual_preds.copy()
+    df_rf_input['Random_Forest_pred'] = rf_full_pred
+    print("\n--- Random Forest Ensemble Input Table (Head) ---")
+    print(df_rf_input.head())
+    df_rf_input.to_csv('tables/ensemble_input_random_forest_predictions.csv', index=False)
+
+    # Gradient Boosting Ensemble Input Table
+    gb_full_pred = final_gb.predict(full_features_scaled)
+    df_gb_input = df_individual_preds.copy()
+    df_gb_input['Gradient_Boosting_pred'] = gb_full_pred
+    print("\n--- Gradient Boosting Ensemble Input Table (Head) ---")
+    print(df_gb_input.head())
+    df_gb_input.to_csv('tables/ensemble_input_gradient_boosting_predictions.csv', index=False)
+    # --- End of Input Tables Generation ---
     
     # Create prediction functions that handle feature engineering
     def create_features(X_new):
@@ -638,8 +671,86 @@ def main():
         generate_bootstrap_predictions
     )
     
-    print("\nAnalysis complete. All visualizations saved to disk.")
-    print(f"Forecast data saved to forecast_results_2024_2028.csv")
+    # --- Generate and Display Full Prediction Table (Overall Comparison) ---
+    print("\n--- Generating Full Prediction Table ---")
+    full_pred_df = pd.DataFrame({
+        'time_idx': X,
+        'date': df['date'],
+        'Actual_Cumulative_Cases': y
+    })
+
+    # Add individual model predictions
+    for model_name, model_data in fitted_models.items():
+        full_pred_df[f"{model_name}_pred"] = model_data['function'](X, *model_data['parameters'])
+
+    # Add ensemble model predictions
+    # Base features for simple and weighted average
+    base_features_full = np.column_stack([
+        model['function'](X, *model['parameters'])
+        for model in fitted_models.values()
+    ])
+
+    # Simple Average
+    full_pred_df['Simple_Average_pred'] = ensemble_models['Simple Average']['predict'](base_features_full)
+
+    # Weighted Average
+    full_pred_df['Weighted_Average_pred'] = ensemble_models['Weighted Average']['predict'](base_features_full)
+
+    # Random Forest & Gradient Boosting (need to recreate features and scale)
+    # This assumes 'create_features' and 'scaler' are correctly set up in ensemble_models dict for RF and GB
+    rf_model_info = ensemble_models['Random Forest']
+    gb_model_info = ensemble_models['Gradient Boosting']
+
+    # Create features for RF and GB using the function stored in ensemble_models
+    # This requires X (time_idx) and access to individual fitted_models to reconstruct base_features within create_features
+    # The 'create_features' function in build_ensemble_models needs to be robust or adjusted if X context is different
+    # For simplicity, we assume 'create_features' correctly uses the global X and fitted_models context
+    # or that it's self-contained if fitted_models is passed appropriately.
+    # The current 'create_features' is defined within build_ensemble_models and uses 'fitted_models' from its scope.
+    # To call it here, we might need to redefine it or make it accessible with the correct context.
+
+    # Re-creating features for RF/GB based on how it's done in build_ensemble_models
+    # This is a bit redundant but ensures consistency if 'create_features' func from dict is tricky to call directly here.
+    time_idx_norm_full = (X - X.min()) / (X.max() - X.min() + 1e-9) # Add epsilon to avoid division by zero if X is constant
+    rf_gb_features_full = np.column_stack([
+        base_features_full,
+        time_idx_norm_full,
+        np.sin(2 * np.pi * time_idx_norm_full),
+        np.cos(2 * np.pi * time_idx_norm_full)
+    ])
+
+    rf_scaled_features_full = rf_model_info['scaler'].transform(rf_gb_features_full)
+    full_pred_df['Random_Forest_pred'] = rf_model_info['model'].predict(rf_scaled_features_full)
+
+    gb_scaled_features_full = gb_model_info['scaler'].transform(rf_gb_features_full) # Should be the same scaler if trained together
+    full_pred_df['Gradient_Boosting_pred'] = gb_model_info['model'].predict(gb_scaled_features_full)
+
+    print("\n--- Full Prediction Table (Head) ---")
+    print(full_pred_df.head())
+    print("\n--- Full Prediction Table (Tail) ---")
+    print(full_pred_df.tail())
+    full_pred_df.to_csv('tables/full_predictions_comparison.csv', index=False)
+    print("Full prediction table saved to 'tables/full_predictions_comparison.csv'")
+    # --- End of Full Prediction Table ---
+
+    # --- Generate and Display Summary Statistics Table of Full Predictions ---
+    print("\n--- Generating Summary Statistics of Predictions ---")
+
+    # Select columns for summary: Actuals and all prediction columns
+    summary_cols = ['Actual_Cumulative_Cases'] + [col for col in full_pred_df.columns if '_pred' in col]
+    summary_stats_df = full_pred_df[summary_cols].agg(['mean', 'std', 'min', 'max']).transpose()
+
+    # Rename columns for clarity if needed, though default 'mean', 'std', 'min', 'max' are fine.
+    # summary_stats_df.columns = ['Mean', 'Standard Deviation', 'Minimum', 'Maximum']
+
+    print("\n--- Summary Statistics of Predictions ---")
+    print(summary_stats_df)
+    summary_stats_df.to_csv('tables/predictions_summary_statistics.csv', index=True) # index=True to keep model names as row index
+    print("Summary statistics table saved to 'tables/predictions_summary_statistics.csv'")
+    # --- End of Summary Statistics Table ---
+
+    print("\nAnalysis complete. All visualizations and tables saved to disk.")
+    print(f"Forecast data saved to data/forecast_results_2024_2028.csv")
 
 if __name__ == "__main__":
     main()
