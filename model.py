@@ -324,11 +324,20 @@ def build_ensemble_models(X, y, fitted_models, cv_splits):
     # Initialize metrics accumulators
     ensemble_metrics = {
         'Simple Average': {'train_rmse': [], 'test_rmse': [], 'train_r2': [], 'test_r2': [], 'test_mae': []},
-        'Weighted Average': {'train_rmse': [], 'test_rmse': [], 'train_r2': [], 'test_r2': [], 'test_mae': []},
+        'Weighted Average (ExpR2)': {'train_rmse': [], 'test_rmse': [], 'train_r2': [], 'test_r2': [], 'test_mae': [], 'weights_history': []},
+        'Weighted Average (TestR2)': {'train_rmse': [], 'test_rmse': [], 'train_r2': [], 'test_r2': [], 'test_mae': [], 'weights_history': []},
+        'Weighted Average (InvTestMSE)': {'train_rmse': [], 'test_rmse': [], 'train_r2': [], 'test_r2': [], 'test_mae': [], 'weights_history': []},
         'Random Forest': {'train_rmse': [], 'test_rmse': [], 'train_r2': [], 'test_r2': [], 'test_mae': []},
         'Gradient Boosting': {'train_rmse': [], 'test_rmse': [], 'train_r2': [], 'test_r2': [], 'test_mae': []}
     }
     
+    # To store the final weights for each scheme (e.g., from the last fold or averaged)
+    final_weights = {
+        'ExpR2': None,
+        'TestR2': None,
+        'InvTestMSE': None
+    }
+
     # Enhanced parameter grids
     rf_param_grid = {
         'n_estimators': [100, 200, 300],
@@ -401,42 +410,66 @@ def build_ensemble_models(X, y, fitted_models, cv_splits):
         ensemble_metrics['Simple Average']['test_mae'].append(
             mean_absolute_error(y_test, simple_avg_test_pred))
         
-        # Improved weighted average using exponential weighting
-        model_weights = []
+        # --- Weighted Average Schemes ---
+        epsilon = 1e-9 # For numerical stability
+
+        # Scheme 1: Exponential R² (Existing)
+        weights_expr2 = []
         for j in range(train_base_features.shape[1]):
-            train_pred = train_base_features[:, j]
-            test_pred = test_base_features[:, j]
-            
-            train_r2 = float(max(0.0, r2_score(y_train, train_pred)))
-            test_r2 = float(max(0.0, r2_score(y_test, test_pred)))
-            
-            # Exponential weighting gives more importance to models that perform well on both train and test
-            weight = np.exp(train_r2 + test_r2)
-            model_weights.append(weight)
-        
-        model_weights = np.array(model_weights)
-        if sum(model_weights) > 0:
-            weights = model_weights / sum(model_weights)
-            weighted_avg_train_pred = np.sum(train_base_features * weights.reshape(1, -1), axis=1)
-            weighted_avg_test_pred = np.sum(test_base_features * weights.reshape(1, -1), axis=1)
-            
-            if i == len(cv_splits) - 1:
-                best_r2_weights = weights
+            train_r2_val = float(max(0.0, r2_score(y_train, train_base_features[:, j])))
+            test_r2_val = float(max(0.0, r2_score(y_test, test_base_features[:, j])))
+            weights_expr2.append(np.exp(train_r2_val + test_r2_val))
+        weights_expr2 = np.array(weights_expr2)
+        if sum(weights_expr2) > epsilon:
+            weights_expr2 = weights_expr2 / sum(weights_expr2)
         else:
-            weighted_avg_train_pred = simple_avg_train_pred
-            weighted_avg_test_pred = simple_avg_test_pred
+            weights_expr2 = np.ones(base_features.shape[1]) / base_features.shape[1] # Fallback to equal weights
+        ensemble_metrics['Weighted Average (ExpR2)']['weights_history'].append(weights_expr2)
+
+        # Scheme 2: Test R² based
+        weights_test_r2 = []
+        for j in range(test_base_features.shape[1]):
+            r2_val = float(max(0.0, r2_score(y_test, test_base_features[:, j]))) # Use only test R²
+            weights_test_r2.append(r2_val)
+        weights_test_r2 = np.array(weights_test_r2)
+        if sum(weights_test_r2) > epsilon:
+            weights_test_r2 = weights_test_r2 / sum(weights_test_r2)
+        else:
+            weights_test_r2 = np.ones(base_features.shape[1]) / base_features.shape[1]
+        ensemble_metrics['Weighted Average (TestR2)']['weights_history'].append(weights_test_r2)
+
+        # Scheme 3: Inverse Test MSE based
+        weights_inv_mse = []
+        for j in range(test_base_features.shape[1]):
+            mse_val = mean_squared_error(y_test, test_base_features[:, j])
+            weights_inv_mse.append(1.0 / (mse_val + epsilon))
+        weights_inv_mse = np.array(weights_inv_mse)
+        if sum(weights_inv_mse) > epsilon:
+            weights_inv_mse = weights_inv_mse / sum(weights_inv_mse)
+        else:
+            weights_inv_mse = np.ones(base_features.shape[1]) / base_features.shape[1]
+        ensemble_metrics['Weighted Average (InvTestMSE)']['weights_history'].append(weights_inv_mse)
+
+        # Calculate predictions and metrics for each weighted average scheme
+        for scheme_name, current_weights_list in [
+            ('Weighted Average (ExpR2)', ensemble_metrics['Weighted Average (ExpR2)']['weights_history'][-1]),
+            ('Weighted Average (TestR2)', ensemble_metrics['Weighted Average (TestR2)']['weights_history'][-1]),
+            ('Weighted Average (InvTestMSE)', ensemble_metrics['Weighted Average (InvTestMSE)']['weights_history'][-1])
+        ]:
+            wa_train_pred = np.sum(train_base_features * current_weights_list.reshape(1, -1), axis=1)
+            wa_test_pred = np.sum(test_base_features * current_weights_list.reshape(1, -1), axis=1)
+
+            ensemble_metrics[scheme_name]['train_rmse'].append(np.sqrt(mean_squared_error(y_train, wa_train_pred)))
+            ensemble_metrics[scheme_name]['test_rmse'].append(np.sqrt(mean_squared_error(y_test, wa_test_pred)))
+            ensemble_metrics[scheme_name]['train_r2'].append(r2_score(y_train, wa_train_pred))
+            ensemble_metrics[scheme_name]['test_r2'].append(r2_score(y_test, wa_test_pred))
+            ensemble_metrics[scheme_name]['test_mae'].append(mean_absolute_error(y_test, wa_test_pred))
         
-        # Store metrics for weighted average
-        ensemble_metrics['Weighted Average']['train_rmse'].append(
-            np.sqrt(mean_squared_error(y_train, weighted_avg_train_pred)))
-        ensemble_metrics['Weighted Average']['test_rmse'].append(
-            np.sqrt(mean_squared_error(y_test, weighted_avg_test_pred)))
-        ensemble_metrics['Weighted Average']['train_r2'].append(
-            r2_score(y_train, weighted_avg_train_pred))
-        ensemble_metrics['Weighted Average']['test_r2'].append(
-            r2_score(y_test, weighted_avg_test_pred))
-        ensemble_metrics['Weighted Average']['test_mae'].append(
-            mean_absolute_error(y_test, weighted_avg_test_pred))
+        # Store weights from the last fold as the "final" weights for later use (e.g. for full data prediction)
+        if i == len(cv_splits) - 1:
+            final_weights['ExpR2'] = weights_expr2
+            final_weights['TestR2'] = weights_test_r2
+            final_weights['InvTestMSE'] = weights_inv_mse
         
         # Scale features for ML models
         scaler = StandardScaler()
@@ -549,40 +582,59 @@ def build_ensemble_models(X, y, fitted_models, cv_splits):
     # --- End of Input Tables Generation ---
     
     # Create prediction functions that handle feature engineering
-    def create_features(X_new):
-        base_features = np.column_stack([
-            model['function'](X_new, *model['parameters'])
+    def create_features(X_new_tdi): # Changed X_new to X_new_tdi to avoid conflict with outer scope X
+        # This function relies on 'fitted_models' and outer scope 'X' (for min/max norm) from build_ensemble_models
+        # Ensure this context is correct when this function is eventually called.
+        base_f = np.column_stack([
+            model['function'](X_new_tdi, *model['parameters'])
             for model in fitted_models.values()
         ])
-        time_idx_norm = (X_new - X.min()) / (X.max() - X.min())
+        # Normalize X_new_tdi using the original X's min/max for consistency
+        time_idx_norm_new = (X_new_tdi - X.min()) / (X.max() - X.min() + 1e-9)
         return np.column_stack([
-            base_features,
-            time_idx_norm,
-            np.sin(2 * np.pi * time_idx_norm),
-            np.cos(2 * np.pi * time_idx_norm)
+            base_f,
+            time_idx_norm_new,
+            np.sin(2 * np.pi * time_idx_norm_new),
+            np.cos(2 * np.pi * time_idx_norm_new)
         ])
     
+    # If CV didn't run (e.g. n_splits too low or error), final_weights might not be set.
+    # Fallback to equal weights if any scheme's weights are missing.
+    num_base_models = base_features.shape[1]
+    for scheme in ['ExpR2', 'TestR2', 'InvTestMSE']:
+        if final_weights[scheme] is None:
+            print(f"Warning: final_weights for {scheme} not set, falling back to equal weights.")
+            final_weights[scheme] = np.ones(num_base_models) / num_base_models
+
     ensemble_models = {
         'Simple Average': {
-            'predict': lambda x: np.mean(x[:, :len(fitted_models)], axis=1)
+            'predict': lambda bf: np.mean(bf[:, :num_base_models], axis=1)
         },
-        'Weighted Average': {
-            'predict': lambda x: np.sum(x[:, :len(fitted_models)] * best_r2_weights.reshape(1, -1), axis=1),
-            'weights': best_r2_weights
+        'Weighted Average (ExpR2)': {
+            'predict': lambda bf: np.sum(bf[:, :num_base_models] * final_weights['ExpR2'].reshape(1, -1), axis=1),
+            'weights': final_weights['ExpR2']
+        },
+        'Weighted Average (TestR2)': {
+            'predict': lambda bf: np.sum(bf[:, :num_base_models] * final_weights['TestR2'].reshape(1, -1), axis=1),
+            'weights': final_weights['TestR2']
+        },
+        'Weighted Average (InvTestMSE)': {
+            'predict': lambda bf: np.sum(bf[:, :num_base_models] * final_weights['InvTestMSE'].reshape(1, -1), axis=1),
+            'weights': final_weights['InvTestMSE']
         },
         'Random Forest': {
             'model': final_rf,
             'scaler': scaler,
-            'create_features': create_features
+            'create_features_func': create_features # Store the function itself
         },
         'Gradient Boosting': {
             'model': final_gb,
             'scaler': scaler,
-            'create_features': create_features
+            'create_features_func': create_features # Store the function itself
         }
     }
     
-    return ensemble_models, final_metrics
+    return ensemble_models, final_metrics, final_weights # Return final_weights as well
 # Main function
 def main():
     # Load and explore data
@@ -635,7 +687,8 @@ def main():
     print("Individual Observed vs. Predicted charts saved to 'plots/' directory.")
     
     # Build ensemble models with hyperparameter tuning
-    ensemble_models, ensemble_metrics = build_ensemble_models(X, y, fitted_models, cv_splits)
+    # Now also returns final_weights for the weighted average schemes
+    ensemble_models, ensemble_metrics, final_ensemble_weights = build_ensemble_models(X, y, fitted_models, cv_splits)
     
     # Identify best models
     best_model_name = max(model_metrics, key=lambda k: model_metrics[k]['test_r2'])
@@ -647,8 +700,84 @@ def main():
     # Visualize ensemble comparisons
     visualize_ensemble_comparison(df, X, y, cv_splits, fitted_models, ensemble_models, best_model_name)
     
-    # Compare model metrics
+    # Compare model metrics (overall)
     visualize_metrics_comparison(model_metrics, ensemble_metrics)
+
+    # --- Compare Weighted Average Schemes ---
+    print("\n--- Weighted Average Scheme Performance Comparison ---")
+    wa_scheme_names = ['Weighted Average (ExpR2)', 'Weighted Average (TestR2)', 'Weighted Average (InvTestMSE)']
+    wa_comparison_data = {
+        'Scheme': [],
+        'Avg Test RMSE': [],
+        'Avg Test R²': [],
+        'Avg Test MAE': []
+    }
+    for scheme_name in wa_scheme_names:
+        if scheme_name in ensemble_metrics:
+            metrics = ensemble_metrics[scheme_name]
+            wa_comparison_data['Scheme'].append(scheme_name)
+            wa_comparison_data['Avg Test RMSE'].append(metrics.get('test_rmse', np.nan)) # Use .get for safety
+            wa_comparison_data['Avg Test R²'].append(metrics.get('test_r2', np.nan))
+            wa_comparison_data['Avg Test MAE'].append(metrics.get('test_mae', np.nan))
+        else:
+            print(f"Warning: Metrics for {scheme_name} not found in ensemble_metrics.")
+
+    if wa_comparison_data['Scheme']: # Check if any data was added
+        df_wa_comparison = pd.DataFrame(wa_comparison_data)
+        print(df_wa_comparison.to_string(index=False))
+        df_wa_comparison.to_csv('tables/weighted_average_scheme_comparison.csv', index=False)
+        print("Weighted Average scheme comparison table saved to 'tables/weighted_average_scheme_comparison.csv'")
+    else:
+        print("No data to compare for Weighted Average schemes.")
+    # --- End of Weighted Average Scheme Comparison ---
+
+    # --- Generate Detailed Parameter, Weight, and Growth Rate Tables ---
+    print("\n--- Generating Detailed Weighted Average Scheme Tables ---")
+    growth_rate_param_indices = {
+        'Exponential': 1, # 'b'
+        'Logistic': 1,    # 'b'
+        'Richards': 1,    # 'b'
+        'Gompertz': 2     # 'c'
+    }
+    individual_model_names = list(fitted_models.keys()) # Should be ['Exponential', 'Logistic', 'Richards', 'Gompertz']
+
+    for scheme_key, scheme_name_full in [
+        ('ExpR2', 'Weighted Average (ExpR2)'),
+        ('TestR2', 'Weighted Average (TestR2)'),
+        ('InvTestMSE', 'Weighted Average (InvTestMSE)')
+    ]:
+        if scheme_key not in final_ensemble_weights or final_ensemble_weights[scheme_key] is None:
+            print(f"Skipping detailed table for {scheme_name_full} as weights are not available.")
+            continue
+
+        current_weights = final_ensemble_weights[scheme_key]
+        table_data = {
+            'Individual Model': [],
+            'Growth_Rate_Parameter_Value': [],
+            f'Assigned_Weight_{scheme_key}': []
+        }
+        total_weighted_growth_rate = 0
+
+        for i, model_name in enumerate(individual_model_names):
+            table_data['Individual Model'].append(model_name)
+
+            param_idx = growth_rate_param_indices[model_name]
+            growth_rate_val = fitted_models[model_name]['parameters'][param_idx]
+            table_data['Growth_Rate_Parameter_Value'].append(growth_rate_val)
+
+            weight_val = current_weights[i]
+            table_data[f'Assigned_Weight_{scheme_key}'].append(weight_val)
+
+            total_weighted_growth_rate += growth_rate_val * weight_val
+
+        df_scheme_details = pd.DataFrame(table_data)
+        print(f"\n--- Details for {scheme_name_full} ---")
+        print(df_scheme_details.to_string(index=False))
+        print(f"Overall Weighted Growth Rate for {scheme_name_full}: {total_weighted_growth_rate:.4f}")
+
+        df_scheme_details.to_csv(f'tables/weighted_average_details_{scheme_key}.csv', index=False)
+        print(f"Detailed table for {scheme_name_full} saved to 'tables/weighted_average_details_{scheme_key}.csv'")
+    # --- End of Detailed Parameter, Weight, and Growth Rate Tables ---
     
     # Create validation plot
     create_validation_plot(
@@ -693,11 +822,12 @@ def main():
     # Simple Average
     full_pred_df['Simple_Average_pred'] = ensemble_models['Simple Average']['predict'](base_features_full)
 
-    # Weighted Average
-    full_pred_df['Weighted_Average_pred'] = ensemble_models['Weighted Average']['predict'](base_features_full)
+    # Weighted Average Schemes
+    full_pred_df['Weighted_Average_ExpR2_pred'] = ensemble_models['Weighted Average (ExpR2)']['predict'](base_features_full)
+    full_pred_df['Weighted_Average_TestR2_pred'] = ensemble_models['Weighted Average (TestR2)']['predict'](base_features_full)
+    full_pred_df['Weighted_Average_InvTestMSE_pred'] = ensemble_models['Weighted Average (InvTestMSE)']['predict'](base_features_full)
 
-    # Random Forest & Gradient Boosting (need to recreate features and scale)
-    # This assumes 'create_features' and 'scaler' are correctly set up in ensemble_models dict for RF and GB
+    # Random Forest & Gradient Boosting
     rf_model_info = ensemble_models['Random Forest']
     gb_model_info = ensemble_models['Gradient Boosting']
 
